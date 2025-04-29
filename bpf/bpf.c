@@ -1,14 +1,14 @@
 //go:build ignore
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/in.h>
-#include <linux/if_link.h>
 
 char LICENSE[] SEC("license") = "GPL";
+
+#define ETH_HLEN	14
+#define ETH_ALEN	6
+#define ETH_P_IP	0x0800
 
 #define L3_OFF          ETH_HLEN                          // = 14 bytes
 #define IPv4_OFF        (L3_OFF + sizeof(struct iphdr))   // = 14 bytes + 20 bytes = 34 bytes
@@ -19,7 +19,10 @@ char LICENSE[] SEC("license") = "GPL";
 
 #define AF_INET		2	/* Internet IP Protocol 	*/
 
-volatile const __u32 fib_iif = 0;
+volatile const __u32 fib_iif = 4;
+
+// ifindex of the ctr's netkit interface
+volatile const __u32 ctr_nk_ifi = 0;
 
 // NETKIT_DROP == TCX_DROP // NETKIT_REDIRECT == TCX_REDIRECT
 static int fib_redirect(struct __sk_buff *skb, __be32 daddr) {
@@ -37,16 +40,22 @@ static int fib_redirect(struct __sk_buff *skb, __be32 daddr) {
         return NETKIT_PASS;
     }
     if (fib_res != 0 && fib_res != BPF_FIB_LKUP_RET_NO_NEIGH) {
-        // bpf_printk("failed to look up route for daddr %08x (res: %d)", daddr, fib_res);
+        bpf_printk("failed to look up route for daddr %08x (res: %d)", daddr, fib_res);
         return NETKIT_DROP;
     }
 
     if (fib_params.ifindex == skb->ingress_ifindex) {
-        // bpf_printk("fib_params.ifindex == skb->ingress_ifindex (%d)", fib_params.ifindex);
+        bpf_printk("fib_params.ifindex == skb->ingress_ifindex (%d)", fib_params.ifindex);
         return NETKIT_PASS;
     }
 
-    // bpf_printk("successful FIB lookup! ifindex: %d", fib_params.ifindex);
+    bpf_printk("successful FIB lookup! ifindex: %d -- res: %d", fib_params.ifindex, fib_res);
+    bpf_printk("  smac: %02x:%02x:%02x:%02x:%02x:%02x",
+               fib_params.smac[0], fib_params.smac[1], fib_params.smac[2],
+               fib_params.smac[3], fib_params.smac[4], fib_params.smac[5]);
+   bpf_printk("  dmac: %02x:%02x:%02x:%02x:%02x:%02x",
+               fib_params.dmac[0], fib_params.dmac[1], fib_params.dmac[2],
+               fib_params.dmac[3], fib_params.dmac[4], fib_params.dmac[5]);
     bpf_redirect(fib_params.ifindex, 0);
 
     // If fib_res == BPF_FIB_LKUP_RET_NO_NEIGH, smac and dmac are all-zeroes.
@@ -85,7 +94,16 @@ int egress_redirect(struct __sk_buff *skb) {
         return NETKIT_PASS; // Packet going to the other end of the netkit pair
     }
 
-    return fib_redirect(skb, ipv4->daddr);
+    if (ipv4->daddr == 0xfe41a8c0) {
+        // bpf_printk("IPv4 packet destined to host.docker.internal received -- %08x -> %08x", ipv4->saddr, ipv4->daddr);
+        bpf_redirect(4, 0);
+        return NETKIT_REDIRECT;
+    }
+
+    // bpf_printk("IPv4 packet received -- %08x -> %08x", ipv4->saddr, ipv4->daddr);
+
+    // return fib_redirect(skb, ipv4->daddr);
+    return NETKIT_PASS;
 }
 
 SEC("tcx/ingress")
@@ -103,11 +121,21 @@ int host_ingress(struct __sk_buff *skb) {
     }
 
     struct iphdr *ipv4 = data + L3_OFF;
-    if ((ipv4->daddr & NET_MASK) != NET_PREFIX) {
+    /* if ((ipv4->daddr & NET_MASK) != NET_PREFIX) {
         // This packet isn't addressed to the netkit subnet, don't try to
         // fastpath it.
         return TCX_PASS;
+    } */
+
+    // bpf_printk("IPv4 packet received from host -- %08x -> %08x", ipv4->saddr, ipv4->daddr);
+
+    if (ipv4->daddr == 0x02001eac) {
+        // bpf_printk("IPv4 packet destined to netkit subnet received -- redirecting to iface %d -- %08x -> %08x", ctr_nk_ifi, ipv4->saddr, ipv4->daddr);
+        bpf_redirect_peer(ctr_nk_ifi, 0);
+        // bpf_printk("bpf_redirect returned %d", ret);
+        return TCX_REDIRECT;
     }
 
-    return fib_redirect(skb, ipv4->daddr);
+    // return fib_redirect(skb, ipv4->daddr);
+    return TCX_PASS;
 }

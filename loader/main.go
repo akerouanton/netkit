@@ -19,6 +19,7 @@ var (
 	flagBPF        string
 	flagProgram    string
 	flagFIBIface   string
+	flagCtrNKIfi   int
 )
 
 func main() {
@@ -27,6 +28,7 @@ func main() {
 	flag.StringVar(&flagBPF, "bpf", "", "Path to the BPF object")
 	flag.StringVar(&flagProgram, "prog", "", "Name of the BPF program to attach to the interface")
 	flag.StringVar(&flagFIBIface, "fib-iface", "", "Interface that should be used as the output iface for fib lookups")
+	flag.IntVar(&flagCtrNKIfi, "ctr-nk-ifi", 0, "Ifindex of the ctr's netkit interface")
 	flag.Parse()
 
 	ifIndex, err := net.InterfaceByName(flagIface)
@@ -43,7 +45,7 @@ func main() {
 		flagFIBIface = flagIface
 	}
 
-	fibIfIndex, err := net.InterfaceByName(flagFIBIface)
+	/* fibIfIndex, err := net.InterfaceByName(flagFIBIface)
 	if err != nil {
 		panic(err)
 	}
@@ -59,6 +61,14 @@ func main() {
 		"fib_iif": uint32(fibIfIndex.Index),
 	}); err != nil {
 		panic(fmt.Errorf("could not rewrite constants: %v", err))
+	} */
+
+	if flagCtrNKIfi != 0 {
+		if err := collSpec.RewriteConstants(map[string]any{
+			"ctr_nk_ifi": uint32(flagCtrNKIfi),
+		}); err != nil {
+			panic(fmt.Errorf("could not rewrite constants: %v", err))
+		}
 	}
 
 	coll, err := ebpf.NewCollectionWithOptions(collSpec, ebpf.CollectionOptions{})

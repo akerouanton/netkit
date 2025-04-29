@@ -1,5 +1,7 @@
 .PHONY: build
 build:
-	clang -O2 -Wall -mcpu=v1 -g -target bpfel -c bpf.c -o bpf.o
-	go build -o loader -gcflags="all=-N -l" ./
+	docker build -t netkit-loader --target final .
 
+.PHONY: run
+run: build
+	docker run --rm --name netkit-test -it --pid=host --network=host --privileged netkit-loader /bin/sh -s

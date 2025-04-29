@@ -1,0 +1,5 @@
+#!/bin/sh
+
+mount -t bpf bpf /sys/fs/bpf
+
+exec /bin/sh -s
